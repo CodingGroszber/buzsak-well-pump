@@ -84,34 +84,47 @@ Rules:
 - [x] Soak (120 s healthy, 600 s deadline) then `mark_running_slot_valid`; on deadline `mark_running_slot_invalid_and_reboot`; current health = Wi-Fi up only
 - [ ] Add real health checks to the soak (I2C expander answers, ADC plausible, scan loop running) once the I/O layer exists
 - [ ] Outputs forced OFF before flashing and until self-test passes (hook `before_flash` exists in `main.rs`, drives nothing yet)
-- [ ] Software rollback fallback (NVS boot counter) in case the device bootloader turns out not to support rollback
+- [x] Software rollback fallback: NVS boot counter (3 unconfirmed boots, then switch to the previous slot); decision logic is host-tested in `well-core`, the slot switch is built but not exercised on a device
+- [x] PC-side upload script `scripts/upload-ota.ps1` (parse-checked only, never run against a device)
+- [x] `UpdateHooks` and `HealthSource` interfaces in `well-core`; the I/O layer implements them later (current `UpdateHooks` is a logging stand-in)
+- [x] Shared HTTP server (`http.rs`); OTA registers its routes on it so other features can attach
+- [x] `CONFIG_ESP_TASK_WDT_PANIC=y`: a hung app reboots, and rolls back while unconfirmed
+- [ ] HTTP-aware soak: dropped for now, cannot be verified without running on a device; revisit on the dev board
 - [ ] PC-side upload tool (small Rust CLI or script): compute SHA-256, POST to `/ota`, wait for reboot, poll `/ota/status` until `valid`
 - [x] Produce the OTA image with `scripts/make-ota-image.ps1` (release build, `espflash save-image`, size check, SHA-256): `C:\bw\ota\buzsak_well.bin`, 1,060,736 bytes (16.2% of the 6.25 MB slot); header verified against the C++ image: magic 0xE9, ESP32, dio, 16 MB, 80 MHz (identical flash bytes), project `buzsak_well`, version 0.1.0. `sdkconfig.defaults` was switched to dio afterwards, so the next script run rebuilds ESP-IDF once (~17 min)
 - [x] Commit a `secrets.rs.example` so a fresh clone builds (copy to `secrets.rs`)
-- [ ] Move pure logic (`parse_version`, `constant_time_eq`, later the control logic) into a host-testable crate and add `cargo test`
+- [x] Host-testable crate `crates/well-core` with `cargo test` (OTA policy and interfaces only; control logic stays out until its phase)
 - [ ] Dev-board variant: separate `sdkconfig`/partition table for a smaller flash (the current config targets the 16 MB PLC)
 
 ### Code layout
 
-- `main.rs`: initialisation and orchestration only.
-- `wifi.rs`: station Wi-Fi, `Link` health view, reconnect loop.
-- `ota.rs` (module root) with `ota/`: `server.rs` (routes, replies, status JSON), `upload.rs` (streaming write, SHA-256, activation), `image.rs` (header vetting, version parsing), `auth.rs` (Basic auth), `confirm.rs` (soak, confirm, rollback), `error.rs` (`Rejection`).
-- `secrets.rs`: gitignored credentials.
-- Dependencies kept to what the code uses: `anyhow`, `base64` (Basic auth), `esp-idf-svc`, `log`, `sha2` (image hash), `embuild` (build script).
+- Workspace root: `crates/well-core` (host-testable) and `firmware/` (ESP32 build).
+- `firmware/src/main.rs`: initialisation and orchestration only.
+- `firmware/src/platform/`: `device.rs` (Wi-Fi, production timing) and `sim.rs` (QEMU Ethernet, short timing, pre-release images accepted), selected by the `qemu` feature; `link.rs` is the shared link-state view. `http.rs`: the shared HTTP server.
+- `firmware/src/web/` (`init.rs`, `run.rs`): placeholders for the web page, not wired into any logic.
+- `sim/`: QEMU harness (`Sim.psm1`, `sdkconfig.qemu`) and `tests/Run-OtaTests.ps1` (7 cases, no fault injection).
+- `crates/well-core/src/interfaces/plc.rs`: the PLC's terminals and pins (`I0_x`, `Q0_x`, `S0_x_24v`, `R0_0`, I2C, RS-485, Ethernet SPI) as structs and constants; no production logic.
+- `firmware/src/ota.rs` with `ota/`: `server.rs` (routes), `upload.rs` (streaming write, SHA-256, activation), `image.rs` (header vetting), `auth.rs`, `confirm.rs` (soak, confirm, rollback), `boot_guard.rs` (NVS boot counter), `error.rs`.
+- `firmware/src/secrets.rs`: gitignored credentials.
+- Dependencies: `anyhow`, `base64`, `esp-idf-svc`, `log`, `sha2`, `well-core`, `embuild`. The ADC will need `esp-idf-hal` with `adc-oneshot-legacy` (matches the Arduino `esp_adc_cal` path) when the I/O phase starts.
 
 ### Build notes
 
-- Build with the esp env loaded: `. $env:USERPROFILE\export-esp.ps1; cargo build` (sets `LIBCLANG_PATH`).
-- Build output goes to `C:/bw` (`.cargo/config.toml` `target-dir`): esp-idf-sys refuses long output paths on Windows. The ELF is `C:\bw\xtensa-esp32-espidf\debug\buzsak_well`.
-- `ESP_IDF_GLOB_PT_*` in `.cargo/config.toml` copies `partitions.csv` into the generated ESP-IDF project.
+- Firmware: `cd firmware; . $env:USERPROFILE\export-esp.ps1; cargo build`. Host tests: `cargo test` at the repo root.
+- Build output goes to `C:/bw` (`firmware/.cargo/config.toml` `target-dir`): esp-idf-sys refuses long output paths on Windows. The ELF is `C:\bw\xtensa-esp32-espidf\debug\buzsak_well`.
+- `ESP_IDF_GLOB_PT_*` in `firmware/.cargo/config.toml` copies `partitions.csv` into the generated ESP-IDF project.
 - No cargo `runner` is configured on purpose, so `cargo run` cannot flash anything.
 - OTA image: `powershell -File scripts/make-ota-image.ps1` (release build takes ~17 min from scratch, incremental builds are much faster).
 
-## Phase 2 — OTA failure testing (dev board)
+## Phase 2 — OTA failure testing (QEMU first, then dev board)
 
-- [ ] Good update confirmed and kept
+QEMU simulator (`sim/tests/Run-OtaTests.ps1`) passes the no-fault cases; fault injection is not built into the test run yet.
+
+- [x] Good update confirmed and kept (QEMU)
+- [x] Wrong-hash upload rejected (QEMU)
+- [x] Not-newer and non-image uploads rejected (QEMU)
+- [ ] QEMU: software reset (`esp_restart`) panics in early init after the first boot; harness power-cycles instead. Find out whether this is QEMU only (likely) before trusting reboot behaviour on a device
 - [ ] Corrupt/truncated upload rejected, old image keeps running
-- [ ] Wrong-hash upload rejected
 - [ ] Image that panics on boot rolls back
 - [ ] Image that boot-loops rolls back
 - [ ] Image that hangs (watchdog) rolls back
@@ -128,6 +141,7 @@ Rules:
 - [ ] ADC reading on GPIO 34/35 (ADC1, 12-bit, 11 dB, eFuse calibration) matching `analogReadMilliVolts`; drive `AC7_EN`/`AC8_EN` LOW; validate against C++ readings on the real device
 - [ ] Replicate boot-time pin states: Q outputs LOW, S mode pins set before outputs, GPIO 2/12/15 strapping safety
 - [ ] Decide on pump safety gaps found in the original (manual mode ignores water level, no run-time limit / dry-run protection)
+- [ ] Known C++ defect: leaving manual mode can leave the well pump running without level control (the original never re-evaluates the output); do not copy
 - [ ] Scan loop at 50 ms; fail-safe on sensor loss / invalid selector
 - [ ] Status LED behaviour (Wi-Fi LED, switch LED blink)
 - [ ] HTTP API parity: `/api/state`, `POST /api/control` (refill only), dashboard `/`

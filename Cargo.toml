@@ -1,11 +1,8 @@
-[package]
-name = "buzsak_well"
-version = "0.1.0"
-edition = "2024"
-
-[[bin]]
-name = "buzsak_well"
-harness = false # no libtest on the target
+[workspace]
+resolver = "3"
+members = ["crates/well-core", "firmware"]
+# Root-level cargo commands are host-only; the firmware is built from firmware/.
+default-members = ["crates/well-core"]
 
 [profile.release]
 opt-level = "s"
@@ -13,13 +10,3 @@ opt-level = "s"
 # Unoptimized builds are too large and stack-hungry for the MCU.
 [profile.dev]
 opt-level = "z"
-
-[dependencies]
-anyhow = "1"
-base64 = "0.22"
-esp-idf-svc = "0.53"
-log = "0.4"
-sha2 = "0.10"
-
-[build-dependencies]
-embuild = "0.33.5"

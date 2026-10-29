@@ -1,5 +1,5 @@
 /target
-/.embuild
-/sdkconfig
-/sdkconfig.old
-/src/secrets.rs
+.embuild/
+sdkconfig
+sdkconfig.old
+/firmware/src/secrets.rs

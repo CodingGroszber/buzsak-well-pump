@@ -142,6 +142,7 @@ dependencies = [
  "esp-idf-svc",
  "log",
  "sha2",
+ "well-core",
 ]
 
 [[package]]
@@ -1577,6 +1578,10 @@ checksum = "23f0c9c52aa7cd7d77769a4cfe2a9adb1b331f489a41d912ce14513d5ab995c6"
 dependencies = [
  "unicode-ident",
 ]
+
+[[package]]
+name = "well-core"
+version = "0.1.0"
 
 [[package]]
 name = "which"

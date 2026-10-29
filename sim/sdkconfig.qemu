@@ -1,0 +1,2 @@
+# Extra ESP-IDF settings for the QEMU simulator build only.
+CONFIG_ETH_USE_OPENETH=y

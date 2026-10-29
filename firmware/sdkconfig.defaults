@@ -14,3 +14,6 @@ CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 
 # New image must confirm itself, otherwise the bootloader rolls back on the next reset.
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# A hung app reboots instead of staying stuck; while unconfirmed that also triggers the rollback.
+CONFIG_ESP_TASK_WDT_PANIC=y

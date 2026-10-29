@@ -1,6 +1,21 @@
-# Builds the release firmware and writes the OTA image plus its SHA-256. Offline: never touches a device.
+<#
+.SYNOPSIS
+    Builds the release firmware and writes the OTA image plus its SHA-256.
+
+.DESCRIPTION
+    Runs `cargo build --release` in firmware\, converts the ELF with `espflash save-image` using the
+    flash parameters of the device's C++ image (dio, 80 MHz, 16 MB), checks that the image fits the
+    6.25 MB app slot and writes the lowercase SHA-256 next to it.
+    Offline: never touches a device. A first release build takes about 17 minutes.
+
+.OUTPUTS
+    C:\bw\ota\buzsak_well.bin and C:\bw\ota\buzsak_well.bin.sha256; a one-line summary is printed.
+
+.EXAMPLE
+    powershell -File scripts\make-ota-image.ps1
+#>
 $ErrorActionPreference = 'Stop'
-Set-Location (Split-Path $PSScriptRoot -Parent)
+Set-Location (Join-Path (Split-Path $PSScriptRoot -Parent) 'firmware')
 . "$env:USERPROFILE\export-esp.ps1"
 
 cargo build --release
