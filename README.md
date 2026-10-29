@@ -20,6 +20,89 @@ Current state: a safe LAN OTA update path (rollback on an unhealthy image), test
 | `scripts/make-ota-image.ps1` | Builds the release firmware and the OTA `.bin` with its SHA-256 |
 | `scripts/upload-ota.ps1` | Uploads an image to a device and waits for it to confirm (only run by hand) |
 
+## Architecture
+
+```mermaid
+flowchart TB
+    main["firmware/src/main.rs<br/>init + orchestration only"]
+
+    subgraph fw["firmware (ESP32 binary)"]
+        platform["platform/<br/>device.rs: Wi-Fi, SOAK 120 s,<br/>DEADLINE 600 s, no pre-release<br/>link.rs: Link health view"]
+        http["http.rs<br/>shared HTTP server"]
+        web["web/<br/>init.rs: register routes<br/>run.rs: poll loop<br/>(placeholders)"]
+        ota["ota/<br/>server, upload, image, auth,<br/>confirm, boot_guard, error"]
+        secrets["secrets.rs<br/>(gitignored)"]
+    end
+
+    subgraph core["crates/well-core (host-testable, no hardware)"]
+        policy["ota_policy.rs<br/>version policy, constant-time compare,<br/>hex, boot-counter decision"]
+        iface["interfaces/<br/>UpdateHooks, HealthSource<br/>plc.rs: terminals and pins"]
+    end
+
+    main --> platform
+    main --> http
+    main --> web
+    main --> ota
+    web --> http
+    ota --> http
+    ota --> policy
+    ota -. implements/uses .-> iface
+    platform -. HealthSource .-> iface
+    platform --> secrets
+    ota --> secrets
+```
+
+Startup order in `main()`:
+
+1. Logger, then NVS.
+2. `BootGuard::check_boot()`. It runs first, so an image that keeps failing is rolled back before it does anything else.
+3. `platform::at_boot()`, then `start_network()` (Wi-Fi started, no wait for a connection).
+4. One HTTP server; `web::register` and `ota::register` attach their routes.
+5. `ota::confirm_when_healthy(health, boot_guard)` starts the soak watcher thread.
+6. `network.keep_connected()` blocks forever and retries the link.
+
+OTA update flow:
+
+```mermaid
+sequenceDiagram
+    participant PC as PC (upload-ota.ps1)
+    participant S as ota::server
+    participant U as ota::upload
+    participant I as ota::image
+    participant F as Flash (other slot)
+    participant C as ota::confirm
+
+    PC->>S: POST /ota (Basic auth, Content-Length, X-Sha256)
+    S->>U: authenticated, no upload already running
+    U->>U: running image confirmed? (else 409)
+    U->>I: vet first 288 bytes (magic, chip, project, newer version, pre-release)
+    U->>F: UpdateHooks.flash_starting, stream write + SHA-256
+    U->>U: finish() validates image, compare SHA-256
+    U->>F: activate slot, arm NVS boot counter
+    U-->>PC: 200, then reboot
+    Note over C: new image boots pending-verify
+    C->>C: health stays OK for the soak
+    C->>F: mark valid and clear counter, else rollback
+```
+
+Rollback has two layers: the bootloader (the slot stays pending-verify until the soak passes) and the NVS boot counter (after 3 unconfirmed boots the previous slot is restored, for a bootloader that cannot roll back).
+
+Design rules:
+
+- `main.rs` contains no logic; each module owns one concern.
+- `platform/` is the only place where the device and simulator builds differ (`qemu` feature); the OTA code has no feature checks.
+- Decisions live in `well-core` (versions, credentials, rollback counter) as pure functions tested on the host; the firmware only does I/O around them.
+- `UpdateHooks` and `HealthSource` are the seams to the future I/O layer; the OTA path never knows about pumps.
+- The network never gates control logic: a down link is only retried.
+
+Known gaps:
+
+- `LogHooks` in `main.rs` is a stand-in that drives no outputs, so "outputs off before flashing" is not real until the I/O layer exists.
+- Health is only "link is up"; real checks (I2C expander, ADC plausibility, scan loop alive) come with the I/O layer.
+- `web::poll` is never called and `web::register` registers no routes yet; `interfaces/plc.rs` is not used by the firmware yet.
+- Auth is Basic over plain HTTP: acceptable on a LAN, but the credentials are visible to anyone on it.
+- The main thread is dedicated to `keep_connected()`; a future scan loop needs its own thread or task.
+
 ## Setup
 
 1. Install the ESP Rust toolchain (`espup`), `ldproxy` and `espflash`.
